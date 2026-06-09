@@ -1,7 +1,6 @@
 {
   "version": 2,
   "buildCommand": "npm run build",
-  "devCommand": "npm run dev",
   "installCommand": "npm install",
   "framework": "nextjs",
   "functions": {
@@ -9,10 +8,5 @@
       "maxDuration": 30,
       "memory": 1024
     }
-  },
-  "env": {
-    "MONGODB_URI": "@mongodb_uri",
-    "GROQ_API_KEY": "@groq_api_key",
-    "SESSION_SECRET": "@session_secret"
   }
 }
