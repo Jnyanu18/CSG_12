@@ -1,10 +1,7 @@
 'use server';
 
 import { detectErrorsAutonomously, type AutonomousDetectionResult } from '@/lib/intelligence/autonomous-detector';
-import { chatAssistantForInsights, type ChatAssistantForInsightsInput, type ChatAssistantForInsightsOutput } from '@/ai/flows/chat-assistant-for-insights';
-import { marketPriceForecasting, type MarketPriceForecastingInput, type MarketPriceForecastingOutput } from '@/ai/flows/market-price-forecasting';
-// analyzePlant via genkit removed — replaced with direct Groq call below
-import { forecastYield } from '@/ai/flows/yield-forecasting';
+// All genkit flow imports removed — replaced with direct Groq calls below to avoid OpenTelemetry init on Vercel
 import type { AnalyzePlantInput, PlantAnalysisResult, YieldForecastInput, YieldForecastOutput } from '@/lib/types';
 import { saveInteraction, saveCorrection } from '@/lib/db/interactions';
 import { recordOutcome, getAccuracyMetrics, getImprovementOverTime } from '@/lib/db/accuracy';
@@ -115,6 +112,186 @@ async function analyzePlantDirect(
     confidence:        parsed.confidence        ?? 'medium',
     uncertaintyType:   parsed.uncertaintyType   ?? 'model',
     reasoning:         parsed.reasoning         ?? '',
+  };
+}
+
+// ── Inline types (previously imported from genkit flow files) ─────────────────
+
+export type ChatAssistantForInsightsInput = {
+  query: string;
+  detectionResult?: unknown;
+  forecastResult?: unknown;
+  marketResult?: unknown;
+};
+export type ChatAssistantForInsightsOutput = {
+  reply: string;
+  confidence: 'high' | 'medium' | 'low';
+  uncertaintyType: 'data' | 'domain' | 'model';
+  reasoning: string;
+};
+
+export type MarketPriceForecastingInput = {
+  district?: string;
+  daysAhead: number;
+  readyKg?: number;
+};
+export type MarketPriceForecastingOutput = {
+  forecast: Array<{ date: string; price: number }>;
+  bestDate: string;
+  bestPrice: number;
+  modelInfo: { modelName: string };
+  confidence: 'high' | 'medium' | 'low';
+  uncertaintyType: 'data' | 'domain' | 'model';
+  reasoning: string;
+};
+
+// ── Direct Groq: chat assistant ───────────────────────────────────────────────
+
+async function chatAssistantForInsights(
+  input: ChatAssistantForInsightsInput
+): Promise<ChatAssistantForInsightsOutput> {
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) throw new Error('GROQ_API_KEY is not configured.');
+  const groq = new OpenAI({ apiKey, baseURL: 'https://api.groq.com/openai/v1' });
+
+  const parts: string[] = [];
+  if (input.detectionResult) parts.push(`**Plant Detection Analysis:**\n\`\`\`json\n${JSON.stringify(input.detectionResult, null, 2)}\n\`\`\``);
+  if (input.forecastResult)  parts.push(`**Yield Forecast Analysis:**\n\`\`\`json\n${JSON.stringify(input.forecastResult, null, 2)}\n\`\`\``);
+  if (input.marketResult)    parts.push(`**Market Price & Profit Analysis:**\n\`\`\`json\n${JSON.stringify(input.marketResult, null, 2)}\n\`\`\``);
+  const userContent = (parts.length ? parts.join('\n\n') + '\n\n' : '') + `**User's Question:** "${input.query}"`;
+
+  const completion = await groq.chat.completions.create({
+    model: 'meta-llama/llama-4-scout-17b-16e-instruct',
+    max_tokens: 1024,
+    messages: [
+      {
+        role: 'system',
+        content: `You are an expert agricultural chat assistant. Answer questions using the provided JSON data. Be brief and direct. Format numbers with units (kg, ₹, ₹/kg).
+confidence: "high"=all data present; "medium"=partial data or ambiguity; "low"=critical data missing.
+uncertaintyType: "data"=results not in context; "domain"=unfamiliar practice; "model"=last resort.
+Return ONLY valid JSON: {"reply":"string","confidence":"high|medium|low","uncertaintyType":"data|domain|model","reasoning":"string"}`,
+      },
+      { role: 'user', content: userContent },
+    ],
+  });
+
+  let text = completion.choices[0]?.message?.content ?? '';
+  const match = text.match(/```(?:json)?\s*([\s\S]*?)```/) || text.match(/(\{[\s\S]*\})/);
+  if (match) text = match[1].trim();
+  let parsed: Record<string, unknown>;
+  try { parsed = JSON.parse(text); } catch { parsed = {}; }
+
+  return {
+    reply:           typeof parsed.reply           === 'string' ? parsed.reply           : 'Unable to generate reply.',
+    confidence:      (['high','medium','low'].includes(parsed.confidence as string) ? parsed.confidence : 'medium') as 'high'|'medium'|'low',
+    uncertaintyType: (['data','domain','model'].includes(parsed.uncertaintyType as string) ? parsed.uncertaintyType : 'model') as 'data'|'domain'|'model',
+    reasoning:       typeof parsed.reasoning       === 'string' ? parsed.reasoning       : '',
+  };
+}
+
+// ── Direct Groq: market price forecasting ────────────────────────────────────
+
+async function marketPriceForecasting(
+  input: MarketPriceForecastingInput
+): Promise<MarketPriceForecastingOutput> {
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) throw new Error('GROQ_API_KEY is not configured.');
+  const groq = new OpenAI({ apiKey, baseURL: 'https://api.groq.com/openai/v1' });
+
+  const today = new Date().toISOString().slice(0, 10);
+
+  const completion = await groq.chat.completions.create({
+    model: 'meta-llama/llama-4-scout-17b-16e-instruct',
+    max_tokens: 2048,
+    messages: [
+      {
+        role: 'system',
+        content: `You are an expert in agricultural market price forecasting. Return ONLY valid JSON — no explanation, no markdown.`,
+      },
+      {
+        role: 'user',
+        content: `Today: ${today}
+District: ${input.district ?? 'unspecified'}
+Forecast horizon: ${input.daysAhead} days
+Produce ready: ${input.readyKg ?? 'not specified'} kg
+
+Forecast daily tomato market prices for ${input.daysAhead} days starting from ${today}. All "date" fields must be consecutive YYYY-MM-DD from ${today} forward.
+confidence: "high"=stable patterns; "medium"=some uncertainty; "low"=unknown district or volatile market.
+uncertaintyType: "data"=insufficient market data; "domain"=unfamiliar dynamics; "model"=last resort.
+
+Return: {"forecast":[{"date":"YYYY-MM-DD","price":number}],"bestDate":"YYYY-MM-DD","bestPrice":number,"modelInfo":{"modelName":"string"},"confidence":"high|medium|low","uncertaintyType":"data|domain|model","reasoning":"string"}`,
+      },
+    ],
+  });
+
+  let text = completion.choices[0]?.message?.content ?? '';
+  const match = text.match(/```(?:json)?\s*([\s\S]*?)```/) || text.match(/(\{[\s\S]*\})/);
+  if (match) text = match[1].trim();
+  let parsed: Record<string, unknown>;
+  try { parsed = JSON.parse(text); } catch { parsed = {}; }
+
+  return {
+    forecast:        Array.isArray(parsed.forecast) ? parsed.forecast as Array<{date:string;price:number}> : [],
+    bestDate:        typeof parsed.bestDate  === 'string' ? parsed.bestDate  : today,
+    bestPrice:       typeof parsed.bestPrice === 'number' ? parsed.bestPrice : 0,
+    modelInfo:       (parsed.modelInfo as {modelName:string} | undefined) ?? { modelName: 'Groq Llama 4 Scout' },
+    confidence:      (['high','medium','low'].includes(parsed.confidence as string) ? parsed.confidence : 'medium') as 'high'|'medium'|'low',
+    uncertaintyType: (['data','domain','model'].includes(parsed.uncertaintyType as string) ? parsed.uncertaintyType : 'domain') as 'data'|'domain'|'model',
+    reasoning:       typeof parsed.reasoning === 'string' ? parsed.reasoning : '',
+  };
+}
+
+// ── Direct Groq: yield forecasting ───────────────────────────────────────────
+
+async function forecastYield(
+  input: YieldForecastInput & { domainContext?: string }
+): Promise<YieldForecastOutput> {
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) throw new Error('GROQ_API_KEY is not configured.');
+  const groq = new OpenAI({ apiKey, baseURL: 'https://api.groq.com/openai/v1' });
+
+  const today = new Date().toISOString().slice(0, 10);
+
+  const completion = await groq.chat.completions.create({
+    model: 'meta-llama/llama-4-scout-17b-16e-instruct',
+    max_tokens: 2048,
+    messages: [
+      {
+        role: 'system',
+        content: `You are an expert agricultural AI specializing in yield forecasting. Return ONLY valid JSON — no explanation, no markdown.${input.domainContext ? `\n\nLearned calibration from farmer corrections:\n${input.domainContext}` : ''}`,
+      },
+      {
+        role: 'user',
+        content: `Today: ${today}
+All yieldCurve dates must start from ${today} and be consecutive YYYY-MM-DD forward.
+
+Plant: ${input.analysis.plantType} — ${input.analysis.summary}
+Stages: ${JSON.stringify(input.analysis.stages)}
+Plants: ${input.controls.numPlants}, Avg fruit weight: ${input.controls.avgWeightG}g, Forecast: ${input.controls.forecastDays} days
+
+1. Sum stage counts → total fruits.
+2. Yield (kg) = total fruits × weight(g) × numPlants ÷ 1000.
+3. Model yield curve over ${input.controls.forecastDays} days.
+4. confidence 0–1: 0.8–0.95 if mostly late stages; 0.4–0.65 if early stages or low counts.
+5. uncertaintyType: "data"=detection quality issue; "domain"=unfamiliar variety; "model"=last resort.
+
+Return: {"totalExpectedYieldKg":number,"yieldCurve":[{"date":"YYYY-MM-DD","yieldKg":number}],"confidence":number,"notes":"string","reasoning":"string","uncertaintyType":"data|domain|model"}`,
+      },
+    ],
+  });
+
+  let text = completion.choices[0]?.message?.content ?? '';
+  const match = text.match(/```(?:json)?\s*([\s\S]*?)```/) || text.match(/(\{[\s\S]*\})/);
+  if (match) text = match[1].trim();
+  let parsed: Record<string, unknown>;
+  try { parsed = JSON.parse(text); } catch { parsed = {}; }
+
+  return {
+    totalExpectedYieldKg: typeof parsed.totalExpectedYieldKg === 'number' ? parsed.totalExpectedYieldKg : 0,
+    yieldCurve:           Array.isArray(parsed.yieldCurve) ? parsed.yieldCurve as Array<{date:string;yieldKg:number}> : [],
+    confidence:           typeof parsed.confidence === 'number' ? parsed.confidence : 0.5,
+    notes:                typeof parsed.notes      === 'string' ? parsed.notes      : '',
+    reasoning:            typeof parsed.reasoning  === 'string' ? parsed.reasoning  : '',
   };
 }
 
