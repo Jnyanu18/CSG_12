@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
 
+export const maxDuration = 60;
+
 // This app primarily uses Next.js Server Actions (src/app/actions.ts) to invoke Genkit flows.
 // Keeping this route minimal avoids build breaks from version mismatches in @genkit-ai/next.
 
