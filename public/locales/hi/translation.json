@@ -1,0 +1,22 @@
+{
+  "welcome_to_agrivision": "एग्रीविजनएआई में आपका स्वागत है",
+  "signin_to_dashboard": "अपने डैशबोर्ड तक पहुंचने के लिए साइन इन करें",
+  "email": "ईमेल",
+  "password": "पासवर्ड",
+  "sign_in": "साइन इन करें",
+  "signing_in": "साइन इन हो रहा है...",
+  "no_account": "खाता नहीं है?",
+  "register": "रजिस्टर करें",
+  "create_account": "खाता बनाएं",
+  "join_to_analyze": "अपनी उपज का विश्लेषण शुरू करने के लिए जुड़ें",
+  "already_have_account": "पहले से ही एक खाता है?",
+  "login": "लॉग इन करें",
+  "agrivision_ai": "एग्रीविजनएआई",
+  "detection_stage": "पहचान",
+  "harvest_forecast": "कटाई का पूर्वानुमान",
+  "yield_forecast": "उपज का पूर्वानुमान",
+  "price_profit": "कीमत और लाभ",
+  "chat_assistant": "चैट सहायक",
+  "logout": "लॉग आउट",
+  "download_report": "रिपोर्ट डाउनलोड करें"
+}

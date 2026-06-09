@@ -1,0 +1,155 @@
+/**
+ * Core Philosophy: This ruleset enforces a strict user-ownership model where all data is private to the user who created it.
+ * There are no public collections and no collaborative features. Access control is based entirely on the authenticated user's ID.
+ *
+ * Data Structure: All application data is organized under a top-level `/users/{userId}` collection. This hierarchical structure,
+ * where `userId` is the Firebase Auth UID, ensures that a user's data (plants, detections, forecasts, etc.) is logically
+ * and securely segregated within their own data tree.
+ *
+ * Key Security Decisions:
+ * - Default Deny: All operations are denied by default. Access must be explicitly granted.
+ * - Strict Ownership: A user can only read or write data located under their own `/users/{userId}` path.
+ * - No User Listing: It is not possible to list documents in the top-level `/users` collection.
+ * - Path-Based Security: Authorization decisions are made using the `userId` from the document path, which is fast,
+ *   performant, and avoids the need for extra database reads (`get()` calls).
+ * - Immutability of Relationships: Once a sub-collection document (like a Detection) is created and linked to its parent
+ *   (a Plant), that relationship cannot be changed. This maintains data integrity.
+ *
+ * Denormalization for Authorization: This ruleset does not require denormalization. The path structure `/users/{userId}/...`
+ * provides all necessary context for authorization, making the rules highly efficient.
+ *
+ * Structural Segregation: Each collection (e.g., `plants`, `detections`) contains a single, homogeneous type of data.
+ * This ensures that a single set of security rules can be applied uniformly to all documents within that collection.
+ */
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions for improved readability and reusability.
+
+    /**
+     * Checks if a user is authenticated.
+     */
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    /**
+     * Checks if the currently authenticated user's ID matches the owner ID from the path.
+     */
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+    
+    /**
+     * Checks for ownership on existing documents, preventing writes to non-existent paths.
+     * This is a critical check for all update and delete operations.
+     */
+    function isExistingOwner(userId) {
+      return isOwner(userId) && resource != null;
+    }
+
+    /**
+     * On create, validates that the Detection document is correctly linked to its parent Plant.
+     */
+    function hasValidDetectionLink(plantId) {
+      return request.resource.data.plantId == plantId;
+    }
+
+    /**
+     * On update, ensures the link between a Detection and its parent Plant cannot be changed.
+     */
+    function isDetectionLinkImmutable() {
+      return request.resource.data.plantId == resource.data.plantId;
+    }
+
+    /**
+     * On create, validates that the Forecast document is correctly linked to its parent documents.
+     */
+    function hasValidForecastLink(plantId, detectionId) {
+      return request.resource.data.plantId == plantId && request.resource.data.detectionId == detectionId;
+    }
+
+    /**
+     * On update, ensures the links for a Forecast document are immutable.
+     */
+    function isForecastLinkImmutable() {
+      return request.resource.data.plantId == resource.data.plantId && request.resource.data.detectionId == resource.data.detectionId;
+    }
+    
+    /**
+     * On create, validates that the MarketData document is correctly linked to its parent Forecast.
+     */
+    function hasValidMarketDataLink(forecastId) {
+      return request.resource.data.forecastId == forecastId;
+    }
+    
+    /**
+     * On update, ensures the link between MarketData and its parent Forecast cannot be changed.
+     */
+    function isMarketDataLinkImmutable() {
+      return request.resource.data.forecastId == resource.data.forecastId;
+    }
+    
+
+    // Match all documents within a specific user's data tree.
+    // The {userId} wildcard captures the user's unique ID from the path.
+    match /users/{userId} {
+
+      /**
+       * @description Controls access to a user's plant documents. Only the owner can manage their plants.
+       * @path /users/{userId}/plants/{plantId}
+       * @allow A signed-in user (auth.uid: 'user123') can (create) a new plant at `/users/user123/plants/plant_abc`.
+       * @deny A different user (auth.uid: 'user456') is denied from (get)ting a plant at `/users/user123/plants/plant_abc`.
+       * @principle Restricts access to a user's own data tree.
+       */
+      match /plants/{plantId} {
+        allow get, list: if isOwner(userId);
+        allow create: if isOwner(userId);
+        allow update, delete: if isExistingOwner(userId);
+
+        /**
+         * @description Controls access to detections for a specific plant. Access is inherited from the parent plant's owner.
+         * @path /users/{userId}/plants/{plantId}/detections/{detectionId}
+         * @allow The owner (auth.uid: 'user123') can (list) all detections at `/users/user123/plants/plant_abc/detections`.
+         * @deny An anonymous user is denied from (delete)ing `/users/user123/plants/plant_abc/detections/detection_xyz`.
+         * @principle Enforces hierarchical ownership and validates relational integrity on create/update.
+         */
+        match /detections/{detectionId} {
+          allow get, list: if isOwner(userId);
+          allow create: if isOwner(userId) && hasValidDetectionLink(plantId);
+          allow update: if isExistingOwner(userId) && isDetectionLinkImmutable();
+          allow delete: if isExistingOwner(userId);
+
+          /**
+           * @description Controls access to forecasts for a specific detection. Access is inherited from the owner.
+           * @path /users/{userId}/plants/{plantId}/detections/{detectionId}/forecasts/{forecastId}
+           * @allow The owner (auth.uid: 'user123') can (create) a forecast with a valid `detectionId` and `plantId`.
+           * @deny The owner (auth.uid: 'user123') cannot (update) a forecast to change its `detectionId`.
+           * @principle Enforces hierarchical ownership and validates relational integrity on create/update.
+           */
+          match /forecasts/{forecastId} {
+            allow get, list: if isOwner(userId);
+            allow create: if isOwner(userId) && hasValidForecastLink(plantId, detectionId);
+            allow update: if isExistingOwner(userId) && isForecastLinkImmutable();
+            allow delete: if isExistingOwner(userId);
+            
+            /**
+             * @description Controls access to market data for a specific forecast. Access is inherited from the owner.
+             * @path /users/{userId}/plants/{plantId}/detections/{detectionId}/forecasts/{forecastId}/marketData/{marketDataId}
+             * @allow The owner (auth.uid: 'user123') can (get) market data for their own forecast.
+             * @deny A different user (auth.uid: 'user456') is denied from (create)ing market data under another user's forecast.
+             * @principle Enforces hierarchical ownership and validates relational integrity on create/update.
+             */
+            match /marketData/{marketDataId} {
+              allow get, list: if isOwner(userId);
+              allow create: if isOwner(userId) && hasValidMarketDataLink(forecastId);
+              allow update: if isExistingOwner(userId) && isMarketDataLinkImmutable();
+              allow delete: if isExistingOwner(userId);
+            }
+          }
+        }
+      }
+    }
+  }
+}

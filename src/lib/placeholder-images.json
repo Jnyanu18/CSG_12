@@ -1,0 +1,10 @@
+{
+  "placeholderImages": [
+    {
+      "id": "sample-plant",
+      "description": "A sample tomato plant for analysis.",
+      "imageUrl": "https://picsum.photos/seed/agrifarm1/800/600",
+      "imageHint": "tomato plant"
+    }
+  ]
+}

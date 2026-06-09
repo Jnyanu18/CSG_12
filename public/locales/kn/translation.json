@@ -1,0 +1,22 @@
+{
+  "welcome_to_agrivision": "ಅಗ್ರಿವಿಷನ್ಎಐಗೆ ಸುಸ್ವಾಗತ",
+  "signin_to_dashboard": "ನಿಮ್ಮ ಡ್ಯಾಶ್‌ಬೋರ್ಡ್ ಪ್ರವೇಶಿಸಲು ಸೈನ್ ಇನ್ ಮಾಡಿ",
+  "email": "ಇಮೇಲ್",
+  "password": "ಪಾಸ್ವರ್ಡ್",
+  "sign_in": "ಸೈನ್ ಇನ್ ಮಾಡಿ",
+  "signing_in": "ಸೈನ್ ಇನ್ ಆಗುತ್ತಿದೆ...",
+  "no_account": "ಖಾತೆ ಇಲ್ಲವೆ?",
+  "register": "ನೋಂದಾಯಿಸಿ",
+  "create_account": "ಖಾತೆ ತೆರೆಯಿರಿ",
+  "join_to_analyze": "ನಿಮ್ಮ ಇಳುವರಿಯನ್ನು ವಿಶ್ಲೇಷಿಸಲು ಸೇರಿ",
+  "already_have_account": "ಈಗಾಗಲೇ ಖಾತೆ ಇದೆಯೆ?",
+  "login": "ಲಾಗಿನ್ ಮಾಡಿ",
+  "agrivision_ai": "ಅಗ್ರಿವಿಷನ್ಎಐ",
+  "detection_stage": "ಪತ್ತೆ",
+  "harvest_forecast": "ಕೊಯ್ಲು ಮುನ್ಸೂಚನೆ",
+  "yield_forecast": "ಇಳುವರಿ ಮುನ್ಸೂಚನೆ",
+  "price_profit": "ಬೆಲೆ ಮತ್ತು ಲಾಭ",
+  "chat_assistant": "ಚಾಟ್ ಸಹಾಯಕ",
+  "logout": "ಲಾಗ್ ಔಟ್",
+  "download_report": "ವರದಿಯನ್ನು ಡೌನ್‌ಲೋಡ್ ಮಾಡಿ"
+}
