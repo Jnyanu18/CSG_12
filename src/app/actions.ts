@@ -25,36 +25,34 @@ import path from 'path';
 
 // ── Direct Groq plant analysis (no genkit) ────────────────────────────────────
 
-const PLANT_ANALYSIS_SYSTEM = `You are a precise agricultural vision model. Count ONLY fruits and flowers you can see with complete certainty.
+const PLANT_ANALYSIS_SYSTEM = `You are a precise agricultural vision model that counts fruits in farm images.
 
-STRICT RULES — apply every rule before you count anything:
-1. A LEAF IS NOT A FRUIT. Never count leaves, stems, branches, or soil.
-2. A SHADOW IS NOT A FRUIT. Never count shadows, blurry blobs, or background shapes.
-3. If you are not 100% certain an object is a fruit, DO NOT count it.
-4. If there are NO fruits visible at all, return stages as an empty array []. Zero is a correct and valid answer.
-5. Only count objects you can clearly identify by their shape and color as actual fruits or flowers.`;
+RULES:
+- Count every visible fruit you can identify by shape and color.
+- Do NOT count leaves, stems, branches, soil, or shadows as fruits.
+- If the image shows ONLY leaves/stems with zero fruit, return stages as [].
+- A round red/green/yellow object on a tomato plant IS a tomato — count it.
+- Be accurate but not over-cautious. Missing real fruits is as bad as inventing fake ones.`;
 
 const PLANT_ANALYSIS_USER = `Analyze this plant image and return ONLY valid JSON — no explanation, no markdown.
 
-Step 1 — Image quality (honest estimates):
+Step 1 — Image quality:
 brightnessScore 0-1, contrastScore 0-1, estimatedOcclusion 0-1, imageSharpness 0-1
 imagingAngle: top|side|diagonal|close_up
 lightingCondition: bright_natural|dim_natural|artificial|mixed|backlit
 backgroundClutter: low|medium|high
 
-Step 2 — Plant type: what plant species is this?
+Step 2 — Plant type: what species is this?
 
-Step 3 — Fruit count (STRICT):
-• First ask yourself: "Are there ANY actual fruits or flowers visible?" If NO → stages must be []
-• If YES, count only clearly visible items. For tomatoes: flower, immature, breaker, ripening, pink, mature, overripened. For lemons: flower, fruitlet, immature, mature.
-• Only include stages with count > 0. If a stage has zero, omit it entirely.
+Step 3 — Count all visible fruits by ripeness stage:
+Tomato stages: flower, immature, breaker, ripening, pink, mature, overripened
+Lemon stages: flower, fruitlet, immature, mature
+Other crops: use appropriate stage names.
+Include ONLY stages with count > 0. If truly no fruits visible, stages = [].
 
-Step 4 — Confidence:
-confidence: high|medium|low
-uncertaintyType: data|domain|model
-reasoning: one sentence — what you saw and why
+Step 4 — Summary, confidence (high|medium|low), uncertaintyType (data|domain|model), reasoning (one sentence).
 
-Return this exact JSON shape:
+Return this exact JSON:
 {"brightnessScore":0,"contrastScore":0,"estimatedOcclusion":0,"imageSharpness":0,"imagingAngle":"side","lightingCondition":"bright_natural","backgroundClutter":"low","plantType":"Tomato","summary":"","stages":[],"confidence":"high","uncertaintyType":"model","reasoning":""}`;
 
 async function analyzePlantDirect(
