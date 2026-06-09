@@ -3,7 +3,7 @@
 import { detectErrorsAutonomously, type AutonomousDetectionResult } from '@/lib/intelligence/autonomous-detector';
 import { chatAssistantForInsights, type ChatAssistantForInsightsInput, type ChatAssistantForInsightsOutput } from '@/ai/flows/chat-assistant-for-insights';
 import { marketPriceForecasting, type MarketPriceForecastingInput, type MarketPriceForecastingOutput } from '@/ai/flows/market-price-forecasting';
-import { analyzePlant } from '@/ai/flows/plant-analysis';
+// analyzePlant via genkit removed — replaced with direct Groq call below
 import { forecastYield } from '@/ai/flows/yield-forecasting';
 import type { AnalyzePlantInput, PlantAnalysisResult, YieldForecastInput, YieldForecastOutput } from '@/lib/types';
 import { saveInteraction, saveCorrection } from '@/lib/db/interactions';
@@ -25,6 +25,100 @@ import { connectToDatabase } from '@/lib/mongodb';
 import OpenAI from 'openai';
 import fs from 'fs';
 import path from 'path';
+
+// ── Direct Groq plant analysis (no genkit) ────────────────────────────────────
+
+const PLANT_ANALYSIS_SYSTEM = `You are a precise agricultural vision model. Count ONLY fruits and flowers you can see with complete certainty.
+
+STRICT RULES — apply every rule before you count anything:
+1. A LEAF IS NOT A FRUIT. Never count leaves, stems, branches, or soil.
+2. A SHADOW IS NOT A FRUIT. Never count shadows, blurry blobs, or background shapes.
+3. If you are not 100% certain an object is a fruit, DO NOT count it.
+4. If there are NO fruits visible at all, return stages as an empty array []. Zero is a correct and valid answer.
+5. Only count objects you can clearly identify by their shape and color as actual fruits or flowers.`;
+
+const PLANT_ANALYSIS_USER = `Analyze this plant image and return ONLY valid JSON — no explanation, no markdown.
+
+Step 1 — Image quality (honest estimates):
+brightnessScore 0-1, contrastScore 0-1, estimatedOcclusion 0-1, imageSharpness 0-1
+imagingAngle: top|side|diagonal|close_up
+lightingCondition: bright_natural|dim_natural|artificial|mixed|backlit
+backgroundClutter: low|medium|high
+
+Step 2 — Plant type: what plant species is this?
+
+Step 3 — Fruit count (STRICT):
+• First ask yourself: "Are there ANY actual fruits or flowers visible?" If NO → stages must be []
+• If YES, count only clearly visible items. For tomatoes: flower, immature, breaker, ripening, pink, mature, overripened. For lemons: flower, fruitlet, immature, mature.
+• Only include stages with count > 0. If a stage has zero, omit it entirely.
+
+Step 4 — Confidence:
+confidence: high|medium|low
+uncertaintyType: data|domain|model
+reasoning: one sentence — what you saw and why
+
+Return this exact JSON shape:
+{"brightnessScore":0,"contrastScore":0,"estimatedOcclusion":0,"imageSharpness":0,"imagingAngle":"side","lightingCondition":"bright_natural","backgroundClutter":"low","plantType":"Tomato","summary":"","stages":[],"confidence":"high","uncertaintyType":"model","reasoning":""}`;
+
+async function analyzePlantDirect(
+  input: AnalyzePlantInput & { domainContext?: string }
+): Promise<PlantAnalysisResult & Record<string, unknown>> {
+  const apiKey = process.env.GROQ_API_KEY;
+  if (!apiKey) throw new Error('GROQ_API_KEY is not configured.');
+
+  const groq = new OpenAI({ apiKey, baseURL: 'https://api.groq.com/openai/v1' });
+
+  const systemContent = input.domainContext
+    ? `${PLANT_ANALYSIS_SYSTEM}\n\nLearned calibration from farmer corrections:\n${input.domainContext}`
+    : PLANT_ANALYSIS_SYSTEM;
+
+  const completion = await groq.chat.completions.create({
+    model: 'meta-llama/llama-4-scout-17b-16e-instruct',
+    max_tokens: 1024,
+    messages: [
+      { role: 'system', content: systemContent },
+      {
+        role: 'user',
+        content: [
+          { type: 'image_url', image_url: { url: input.photoDataUri } },
+          { type: 'text', text: PLANT_ANALYSIS_USER },
+        ],
+      },
+    ],
+  });
+
+  let text = completion.choices[0]?.message?.content ?? '';
+  const match = text.match(/```(?:json)?\s*([\s\S]*?)```/) || text.match(/(\{[\s\S]*\})/);
+  if (match) text = match[1].trim();
+
+  let parsed: Record<string, unknown>;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error(`Model returned unparseable output: ${text.slice(0, 300)}`);
+  }
+
+  const stages = (Array.isArray(parsed.stages) ? parsed.stages as Array<{ stage: string; count: number }> : [])
+    .filter(s => s && typeof s.stage === 'string' && typeof s.count === 'number' && s.count > 0);
+
+  return {
+    plantType: typeof parsed.plantType === 'string' ? parsed.plantType : 'Unknown',
+    summary:   typeof parsed.summary   === 'string' ? parsed.summary   : '',
+    stages,
+    brightnessScore:   parsed.brightnessScore,
+    contrastScore:     parsed.contrastScore,
+    estimatedOcclusion: parsed.estimatedOcclusion,
+    imageSharpness:    parsed.imageSharpness,
+    imagingAngle:      parsed.imagingAngle,
+    lightingCondition: parsed.lightingCondition,
+    backgroundClutter: parsed.backgroundClutter,
+    confidence:        parsed.confidence        ?? 'medium',
+    uncertaintyType:   parsed.uncertaintyType   ?? 'model',
+    reasoning:         parsed.reasoning         ?? '',
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 type CaptureConfig<Input> = {
   flowType: IInteraction['flowType'];
@@ -152,7 +246,7 @@ export async function runPlantAnalysis(input: AnalyzePlantInput): Promise<{
 
   const domainContext = await enhancePromptWithDomainKnowledge('plant-analysis', hour).catch(() => '');
   const result = await executeFlow<AnalyzePlantInput, PlantAnalysisResult>(
-    (i) => analyzePlant({ ...i, domainContext }),
+    (i) => analyzePlantDirect({ ...i, domainContext }),
     input,
     {
       flowType:    'plant-analysis',
